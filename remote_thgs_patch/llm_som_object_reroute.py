@@ -760,7 +760,7 @@ def build_command(args: argparse.Namespace) -> int:
         annotation = read_json(json_path)
         prompts = sorted(set(obj["category"] for obj in annotation.get("objects", [])))
         for prompt in prompts:
-            if prompt not in targets:
+            if not args.all_prompts and prompt not in targets:
                 continue
             gt = gt_mask_from_annotation(annotation, prompt, shape)
             if not gt.any():
@@ -1090,6 +1090,7 @@ def make_parser() -> argparse.ArgumentParser:
     build.add_argument("--label_root", default=DEFAULT_LABEL_ROOT)
     build.add_argument("--feature_dir", default="language_features_part_only_update")
     build.add_argument("--targets", nargs="+", default=DEFAULT_TARGETS)
+    build.add_argument("--all_prompts", action="store_true")
     build.add_argument("--source", action="append", help="Selectable source as name=path. May repeat.")
     build.add_argument("--diagnostic_source", action="append", help="Diagnostic source as name=path. May repeat.")
     build.add_argument("--scene_opt_selectable", action="store_true")
