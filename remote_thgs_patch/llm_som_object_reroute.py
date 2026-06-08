@@ -995,7 +995,7 @@ def apply_command(args: argparse.Namespace) -> int:
 
         selected_ids: list[int] = []
         mode_name = args.mode
-        if args.mode == "qwen":
+        if args.mode in {"qwen", "gpt54"}:
             row = selections.get((task["frame"], task["target"]), {})
             selected_ids = [int(x) for x in row.get("selected_ids", [])]
         elif args.mode == "oracle":
@@ -1115,11 +1115,11 @@ def make_parser() -> argparse.ArgumentParser:
     apply.add_argument("--baseline_pred", default="output/render/lerf")
     apply.add_argument("--out_pred", default=DEFAULT_OUT_PRED)
     apply.add_argument("--selection_file", default="selections_qwen.jsonl")
-    apply.add_argument("--mode", choices=["qwen", "oracle"], default="qwen")
+    apply.add_argument("--mode", choices=["qwen", "gpt54", "oracle"], default="qwen")
     apply.set_defaults(func=apply_command)
 
     report = sub.add_parser("report", parents=[common])
-    report.add_argument("--mode", choices=["qwen", "oracle"], default="qwen")
+    report.add_argument("--mode", choices=["qwen", "gpt54", "oracle"], default="qwen")
     report.set_defaults(func=report_command)
     return parser
 
