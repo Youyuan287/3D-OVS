@@ -78,12 +78,253 @@ parent-part 设计目标可以概括为：
 
 因此，parent-part 的目的只“部分达到”：它能让若干 part 查询更符合父物体局部约束，但不能解释或解决四场景中 object-level mIoU 提升不高的问题。
 
-### 3.3 本轮保留和调整的 parent-part 实现
+### 3.3 Parent 和 part 在代码中的链接方式
+
+本项目中 parent-part 不是只在文字上描述“父物体-部件关系”，而是在代码中显式落到三个对象：
+
+| 代码对象 | 含义 | 例子 |
+|---|---|---|
+| `role` | 当前 prompt 的类型 | `object`, `part`, `modifier` |
+| `anchor_terms` | parent/base object，用来生成空间锚点 | `bear nose` 的 anchor 是 `bear` 或候选中的 bear 相关 label |
+| `part_terms` | part noun 或局部语义，用来重排细粒度候选 | `bear nose` 的 part terms 是 `nose`, `bear nose` |
+
+入口在：
+
+```text
+remote_thgs_patch/query_reasoner.py
+```
+
+`heuristic_query_plan()` 会先解析 prompt：
+
+```text
+query = "bear nose"
+tail = "nose"
+tail in PART_HEADS -> role = "part"
+parent = "bear"
+target_terms = ["bear nose", "nose", "nose of bear", "bear's nose"]
+anchor_terms = ["bear"]
+part_terms = ["nose", "bear nose"]
+```
+
+如果 prompt 是 `object with modifier` 结构，例如 `figurine with red hat`，则会被解析为：
+
+```text
+role = "modifier"
+anchor_terms = [base object]
+part_terms = [modifier phrase, modifier head]
+contrast_terms = [same base object but different modifier]
+```
+
+所以 parent-part 链接的第一步是：**把自然语言 prompt 拆成 parent/base anchor 和 part/local term**。
+
+### 3.4 层级语义继承如何实现
+
+层级语义继承在：
+
+```text
+remote_thgs_patch/nag_data.py
+```
+
+`SemanticNAG` 会根据多层 superpoint label 建立 child-parent 映射：
+
+```text
+build_parent_child_maps(labels)
+child_to_parent[level][child_superpoint_id] = parent_superpoint_id
+```
+
+也就是说，每个低层细粒度 superpoint 都知道自己属于哪个高层 parent superpoint。随后 `get_hierarchy_features()` 对低层 feature 加入 parent 上下文：
+
+```text
+enhanced_child =
+    child_feat
+    + parent_weight * gate * parent_feat
+    + residual_weight * (child_feat - parent_feat)
+```
+
+其中：
+
+- `parent_feat` 提供父物体语义上下文。
+- `residual = child_feat - parent_feat` 保留部件局部差异。
+- `gate` 由 child-parent cosine similarity 控制，避免强行把无关 parent 信息注入 child。
+
+这一步解决的是特征层面的链接：**part superpoint 既保留自己的局部语义，也继承 parent object 的上下文**。
+
+### 3.5 推理时如何从 parent 约束 part
+
+主推理入口在：
+
+```text
+remote_thgs_patch/test_lerf.py
+```
+
+当启用 `--refine_parts` 且 `plan.role == "part"` 时，代码进入 part 专用分支：
+
+1. 用 `target_terms` 计算主语义相似度：
+
+```text
+primary_sim = similarity_for_terms(vlm, snag.feat, target_terms)
+```
+
+例如 `bear nose` 会同时使用 `bear nose`, `nose`, `nose of bear`, `bear's nose`。
+
+2. 用 `part_terms` 计算局部 part 相似度：
+
+```text
+aux_sim = similarity_for_terms(vlm, snag.feat, part_terms)
+```
+
+例如 `nose`, `bear nose`。这一步让候选更偏向局部部件，而不是整个 parent。
+
+3. 组合主语义和 part 语义得到候选：
+
+```text
+score = primary_val + part_aux_weight * aux_val
+```
+
+对应函数：
+
+```text
+reranked_candidates(primary_sim, aux_sim, part_levels, part_candidate_topk, part_aux_weight)
+```
+
+4. 用 `anchor_terms` 渲染 parent anchor mask：
+
+```text
+anchor_mask = plan_anchor_mask(..., plan.anchor_terms, ...)
+```
+
+例如先渲染 `bear` 或 `stuffed bear` 的区域，作为 nose 必须落入的空间范围。
+
+5. 用 parent anchor 过滤 part 候选：
+
+```text
+containment = area(candidate_mask ∩ anchor_mask) / area(candidate_mask)
+```
+
+如果 containment 小于 `part_anchor_min_containment`，该候选会被丢弃。保留下来的候选按下式重排：
+
+```text
+final_score =
+    candidate_score
+    + part_anchor_weight * containment
+    - part_area_penalty * area_ratio
+```
+
+对应函数：
+
+```text
+anchor_filtered_related_gaussian(...)
+```
+
+这一步是最关键的 parent-part 链接：**part 候选必须在 parent anchor 内部或高度重合，同时面积不能过大**。
+
+6. 最终把选中的 superpoint 转成 Gaussian mask：
+
+```text
+gaussian_from_candidates(snag, selected)
+```
+
+然后通过 THGS 原本的 Gaussian render 流程输出 2D mask。
+
+### 3.6 Fine segment 后处理中的 parent-part 链接
+
+除了 Gaussian 推理分支，还保留了一个更可解释的 fine segment 后处理：
+
+```text
+remote_thgs_patch/parent_part_proposal_render.py
+```
+
+它的逻辑是：
+
+1. `anchor_candidates(prompt, labels)` 根据 `heuristic_query_plan()` 找 parent/base label。
+2. `load_anchor()` 从 baseline 输出中读取 parent mask，并做轻微 dilation。
+3. 遍历 fine segment map 中所有 segment。
+4. 对每个 segment 计算：
+
+```text
+containment = area(segment ∩ anchor_mask) / area(segment)
+cover = area(segment ∩ anchor_mask) / area(anchor_mask)
+```
+
+5. 如果 segment 不在 parent anchor 内，直接过滤：
+
+```text
+containment < min_containment -> reject
+```
+
+6. 对保留 segment 打分：
+
+```text
+score =
+    containment_weight * containment
+    - cover_penalty * abs(log(cover / target_cover))
+    - level_penalty
+    + semantic_bonus
+    - same_label_area_penalty
+    + consistency_bonus
+```
+
+其中：
+
+- `semantic_bonus` 来自 segment 的 `text_label` 是否等于 `part_terms` 或 head noun。
+- `target_cover` 控制 part 占 parent 的合理比例，例如 `hooves` 更小，`nose` 稍大。
+- `same_label_area_penalty` 防止 text label 正确但区域过大，避免把 parent 整体选成 part。
+- `consistency_bonus` 奖励跨层级重复出现、边界较稳定的 segment。
+
+最后：
+
+```text
+out &= anchor_mask
+```
+
+保证输出 part mask 被裁剪在 parent anchor 范围内。
+
+### 3.7 一个具体例子：`bear nose`
+
+以 `teatime / bear nose` 为例，代码中的链路是：
+
+```text
+prompt: bear nose
+  -> QueryReasoner
+  -> role = part
+  -> anchor_terms = [bear]
+  -> part_terms = [nose, bear nose]
+```
+
+然后：
+
+```text
+anchor_terms [bear]
+  -> 通过 CLIP/NAG 找 bear superpoint
+  -> 渲染成 anchor_mask
+```
+
+同时：
+
+```text
+part_terms [nose, bear nose]
+  -> 在 fine levels 上找 nose-like superpoints/segments
+  -> 候选必须满足 containment(candidate, bear_anchor) 足够高
+  -> 候选面积接近 nose 对 parent 的合理比例
+  -> 输出局部 nose mask
+```
+
+所以 parent 和 part 的关系不是通过 hard-coded 类别表直接连起来，而是通过：
+
+1. prompt 解析得到 `anchor_terms` 和 `part_terms`；
+2. NAG 层级图提供 child-parent superpoint 映射；
+3. parent anchor mask 提供空间约束；
+4. part similarity 和面积先验提供局部选择；
+5. containment 打分把二者绑定到最终 mask。
+
+### 3.8 本轮保留和调整的 parent-part 实现
 
 本轮没有继续使用 `scene fill` 作为主要方法，而是保留了更可解释的 parent-part 后处理与诊断脚本：
 
 ```text
 remote_thgs_patch/test_lerf.py
+remote_thgs_patch/query_reasoner.py
+remote_thgs_patch/nag_data.py
 remote_thgs_patch/parent_part_proposal_render.py
 remote_thgs_patch/diagnose_parent_part_candidates.py
 ```
@@ -104,7 +345,7 @@ remote_thgs_patch/diagnose_parent_part_candidates.py
 
 这部分更适合作为论文或汇报中的 **细粒度 part 修正模块 / failure analysis 工具**，而不是作为解决 object-level failure 的主方法。
 
-### 3.4 Parent-part 与 SoM rerouting 的分工
+### 3.9 Parent-part 与 SoM rerouting 的分工
 
 后续引入 GPT-SoM rerouting，并不是否定 parent-part，而是因为二者解决的问题不同：
 
