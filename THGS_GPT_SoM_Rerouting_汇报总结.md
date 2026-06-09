@@ -637,6 +637,19 @@ visualizations/som_panels/
 ![ramen bowl SoM](visualizations/som_panels/ramen_bowl_frame_00006_som.png)
 ```
 
+已保存到 GitHub 的代表性 SoM 图：
+
+| 目标 | 本地可视化文件 | 作用 |
+|---|---|---|
+| `bowl` | `visualizations/som_panels/ramen_bowl_frame_00006_som.png` | 展示正确 bowl 候选存在 |
+| `plate` | `visualizations/som_panels/ramen_plate_frame_00006_som.png` | 展示 plate 候选被文本标签污染时仍可视觉选择 |
+| `sake cup` | `visualizations/som_panels/ramen_sake_cup_frame_00006_som.png` | 展示小 object 候选 |
+| `kamaboko` | `visualizations/som_panels/ramen_kamaboko_frame_00006_som.png` | 展示局部鱼糕候选与过大候选的差异 |
+| `corn` | `visualizations/som_panels/ramen_corn_frame_00024_som.png` | 展示黄色相似区域混淆 |
+| `onion segments` | `visualizations/som_panels/ramen_onion_segments_frame_00006_som.png` | 展示碎片状小目标候选 |
+
+![ramen bowl SoM](visualizations/som_panels/ramen_bowl_frame_00006_som.png)
+
 ### 10.2 GPT-5.4 before/after 对比图：证明“改后是否有效”
 
 根目录：
@@ -679,6 +692,19 @@ visualizations/gpt54_compare/
 ![ramen bowl GPT compare](visualizations/gpt54_compare/ramen_bowl_frame_00006.png)
 ```
 
+已保存到 GitHub 的 GPT-5.4 before/after 对比图：
+
+| 目标 | 本地可视化文件 | 汇报时说明 |
+|---|---|---|
+| `bowl` | `visualizations/gpt54_compare/ramen_bowl_frame_00006.png` | baseline 为空，GPT-SoM 选中 bowl 候选 |
+| `plate` | `visualizations/gpt54_compare/ramen_plate_frame_00006.png` | 从错误或空预测转为更贴近 plate 的候选 |
+| `sake cup` | `visualizations/gpt54_compare/ramen_sake_cup_frame_00006.png` | 小 object 漏检被部分修正 |
+| `kamaboko` | `visualizations/gpt54_compare/ramen_kamaboko_frame_00006.png` | 抑制过大误检，选择更局部候选 |
+| `corn` | `visualizations/gpt54_compare/ramen_corn_frame_00024.png` | 展示 GPT 对黄色细粒度目标的选择效果和残余混淆 |
+| `onion segments` | `visualizations/gpt54_compare/ramen_onion_segments_frame_00006.png` | 展示碎片目标仍是困难样例 |
+
+![ramen bowl GPT compare](visualizations/gpt54_compare/ramen_bowl_frame_00006.png)
+
 ### 10.3 oracle 上限对比图：证明“候选池上限”
 
 ```text
@@ -696,6 +722,14 @@ oracle 图不是最终方法结果，而是诊断候选池的 upper bound。解�
 ```text
 visualizations/oracle_compare/
 ```
+
+已保存代表性 oracle 图：
+
+```text
+visualizations/oracle_compare/ramen_bowl_frame_00006_oracle.png
+```
+
+![ramen bowl oracle](visualizations/oracle_compare/ramen_bowl_frame_00006_oracle.png)
 
 ### 10.4 Parent-part 可视化：证明“parent 是否真的约束 part”
 
@@ -718,6 +752,23 @@ parent-part 不应只展示最终指标，必须展示 part 是否落在 parent 
 ```text
 visualizations/parent_part/
 ```
+
+已保存到 GitHub 的 parent-part 代表性图：
+
+| 样例 | 本地可视化文件 | 汇报时说明 |
+|---|---|---|
+| `bear nose` SoM | `visualizations/parent_part/teatime_bear_nose_frame_00002_som.png` | 展示 part 候选与 parent anchor 的关系 |
+| `bear nose` 对比 | `visualizations/parent_part/teatime_bear_nose_frame_00002_gpt54.png` | 展示 baseline / GT / rerouting 结果 |
+| `hooves` SoM | `visualizations/parent_part/teatime_hooves_frame_00025_som.png` | 展示小 part 候选容易和 parent/其它小区域混淆 |
+| `hooves` 对比 | `visualizations/parent_part/teatime_hooves_frame_00025_gpt54.png` | 展示 parent 约束和面积先验是否抑制整物体误选 |
+
+![teatime bear nose SoM](visualizations/parent_part/teatime_bear_nose_frame_00002_som.png)
+
+![teatime bear nose compare](visualizations/parent_part/teatime_bear_nose_frame_00002_gpt54.png)
+
+![teatime hooves SoM](visualizations/parent_part/teatime_hooves_frame_00025_som.png)
+
+![teatime hooves compare](visualizations/parent_part/teatime_hooves_frame_00025_gpt54.png)
 
 解释 parent-part 图时要结合 `parent_part_debug.json` 中的字段：
 
