@@ -358,6 +358,48 @@ remote_thgs_patch/diagnose_parent_part_candidates.py
 
 > Parent-part 改进验证了层级语义和空间锚点对细粒度 part 查询是必要的，但整体提升不高说明 THGS 的主要 object failure 不是 parent-part 关系缺失，而是候选选择和语义路由不足。基于这个判断，后续转向 ReLaGS-inspired SoM rerouting，用 VLM 在候选 mask 中做显式选择。
 
+### 3.10 Parent-part 可视化证据：成功与失败案例
+
+为了单独判断 parent-part 是否有效，这里只使用 `render_parent_part/lerf` 的真实输出，不混用 GPT-SoM 结果。
+
+#### 成功案例：`teatime/frame_00002/bear nose`
+
+这个样例中，baseline 把 `bear nose` 误扩展成了几乎整只熊，说明原始 THGS 只靠文本相似度时容易把 part query 扩散为 parent object。parent-part 后处理先用 parent anchor 限定熊的区域，再在该区域内按 part 面积和局部语义选择候选，最终 mask 收缩到鼻子局部。
+
+| 指标 | baseline | parent-part |
+|---|---:|---:|
+| IoU | 0.0642 | 0.9840 |
+| mask 面积 | 154099 | 9761 |
+| GT 面积 | 9906 | 9906 |
+
+![parent-part bear nose success](visualizations/parent_part/teatime_frame_00002_bear_nose_parent_part_compare.png)
+
+这张图从左到右是：
+
+```text
+原图 -> GT -> baseline -> parent-part
+```
+
+可以看到 baseline 的绿色区域覆盖了整只熊，而 parent-part 的橙色区域基本贴合鼻子 GT。这个案例说明：当 parent anchor 正确、fine segment 中存在合适局部候选时，parent-part 能有效抑制 part 扩散成 object。
+
+#### 失败案例：`teatime/frame_00025/hooves`
+
+这个样例中，`hooves` 是更小、更低显著性的 part。baseline 没有选到正确蹄子，parent-part 后处理也没有改善，反而选到了白羊身体/头部的一大片区域。
+
+| 指标 | baseline | parent-part |
+|---|---:|---:|
+| IoU | 0.0000 | 0.0000 |
+| mask 面积 | 1727 | 18302 |
+| GT 面积 | 4678 | 4678 |
+
+![parent-part hooves failure](visualizations/parent_part/teatime_frame_00025_hooves_parent_part_compare.png)
+
+这个失败案例说明：parent-part 的关键前提是候选池里必须存在合理的局部 part segment。如果 fine segment 没有稳定给出蹄子候选，或者 anchor/面积先验把候选推向更显著的身体区域，parent-part 仍然会失败。
+
+因此，对 parent-part 的结论应写得谨慎：
+
+> Parent-part 对 `bear nose` 这类 parent 明确、局部候选存在的 part query 有明显效果；但对 `hooves` 这类小、低显著性、候选不稳定的 part query 效果不稳。它是一个有效的细粒度 part 约束机制，但不是解决所有 object/part failure 的通用模块。
+
 ## 4. 方法调整思路
 
 本轮没有继续依赖 scene fill，而是设计了一个 ReLaGS-inspired 的 SoM 候选选择实验。
