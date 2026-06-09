@@ -48,7 +48,134 @@
 
 因此，问题更像是 **candidate rerouting / candidate selection 不足**，而不是单纯的候选缺失。
 
-## 3. Parent-part 语义继承与细粒度 part 修正
+## 3. 完整复盘：从 THGS failure 到 parent-part 与 SoM 的证据链
+
+本轮改动不是一次性提出一个最终方法，而是沿着 failure analysis 逐步推进。核心复盘如下：
+
+| 阶段 | 观察到的问题 | 做法 | 证据 | 结论 |
+|---|---|---|---|---|
+| baseline 审查 | part query 容易扩成 parent object，object query 经常为空或选错 | 先做 parent-part / hierarchy routing | `bear nose` 可视化、`hooves` 失败可视化 | parent-part 对部分 part 有效，但不能解释 object 大幅低分 |
+| parent-part 复盘 | parent anchor 对某些 part 有帮助，但小 part 候选不稳定 | 加入 anchor containment、面积先验、fine segment 后处理 | `bear nose` IoU `0.0642 -> 0.9840`，`hooves` 仍 `0.0000` | parent-part 是局部有效的 part 修正，不是总体 object 提升主因 |
+| object failure 分析 | `bowl/plate/sake cup` 等 object baseline 为空，但 fine segment 中有正确候选 | 构建 SoM candidate panel | `ramen_bowl_frame_00006_som.png` 等候选图 | 很多 object failure 是候选选择失败，不是候选完全缺失 |
+| GPT-SoM rerouting | 原始 CLIP label 会把正确候选误标成 `plastic ladle/spoon/egg` 等 | 用 GPT-5.4 在编号候选中做视觉选择 | `ramen_bowl/plate/sake cup` before-after 图 | VLM rerouting 能显著改善低分 object 样例 |
+| oracle 上限 | 需要判断 GPT 还有多少选择错误，候选池本身还有多少上限 | 用 GT 选候选计算 oracle | oracle mIoU `0.7362`，GPT-SoM `0.6748` | GPT 已缩小 gap，但候选池和选择器仍有提升空间 |
+
+### 3.1 为什么先做 parent-part
+
+THGS 的细粒度开放词汇 prompt 中有一类典型问题：用户查询的是 part，但模型选出来的是 parent object。例如 `bear nose` 不是“熊”，而是熊鼻子；`hooves` 不是整只羊或玩偶，而是父物体上的局部蹄子。
+
+因此 parent-part 的初始假设是：
+
+> 如果能显式建立 parent anchor，再在 parent 内选择 part 候选，就能抑制 part mask 扩散成 object。
+
+这个想法在 `bear nose` 上成立：
+
+![parent-part bear nose success](visualizations/parent_part/teatime_frame_00002_bear_nose_parent_part_compare.png)
+
+`bear nose` 的结果说明：
+
+| 方法 | IoU | mask 面积 | 解释 |
+|---|---:|---:|---|
+| baseline | 0.0642 | 154099 | 几乎选成整只熊，说明 part 被 parent object 淹没 |
+| parent-part | 0.9840 | 9761 | mask 收缩到鼻子局部，面积接近 GT `9906` |
+
+但这个想法在 `hooves` 上失败：
+
+![parent-part hooves failure](visualizations/parent_part/teatime_frame_00025_hooves_parent_part_compare.png)
+
+`hooves` 的结果说明：
+
+| 方法 | IoU | mask 面积 | 解释 |
+|---|---:|---:|---|
+| baseline | 0.0000 | 1727 | 没有选到正确蹄子 |
+| parent-part | 0.0000 | 18302 | 仍未找到正确 part，反而选到白羊身体/头部大区域 |
+
+所以 parent-part 的真实结论是：
+
+> 它能解决“part 被 parent object 淹没”的一部分样例，但依赖两个前提：parent anchor 要正确，fine segment 中要有稳定的 part 候选。对 `hooves` 这类小、低显著性、候选不稳定的 part，parent-part 仍会失败。
+
+### 3.2 为什么 parent-part 不能解释总体提升不高
+
+进一步看 LERF 四场景，低分项不仅有 part，还有大量 object：
+
+```text
+bowl, plate, sake cup, kamaboko, corn, onion segments
+```
+
+这些不是 parent-part 问题。它们的失败更像是：
+
+- baseline 输出空 mask；
+- 或者选择了过大/错误区域；
+- 或者正确候选存在，但自动 text label 错了；
+- 例如 bowl 的正确候选可能被标成 `plastic ladle`。
+
+因此如果继续只优化 parent-part，最多改善一小部分 part query，无法显著提升整体 mIoU。
+
+### 3.3 为什么转向 SoM rerouting
+
+SoM rerouting 的核心假设是：
+
+> 既然 fine segment / proposal 中已经存在很多正确 mask，那么应该把问题转成“候选选择”而不是继续直接渲染一个单一 mask。
+
+以 `ramen / bowl / frame_00006` 为例，SoM 候选图显示候选池中存在接近目标的 bowl mask：
+
+![ramen bowl SoM](visualizations/som_panels/ramen_bowl_frame_00006_som.png)
+
+GPT-5.4 before-after 图显示，rerouting 后能把 baseline 空/错 mask 改成更接近 GT 的 mask：
+
+![ramen bowl GPT compare](visualizations/gpt54_compare/ramen_bowl_frame_00006.png)
+
+同类可视化还包括：
+
+| 目标 | SoM 候选图 | GPT-5.4 对比图 | 说明 |
+|---|---|---|---|
+| `plate` | `visualizations/som_panels/ramen_plate_frame_00006_som.png` | `visualizations/gpt54_compare/ramen_plate_frame_00006.png` | 正确候选常被错误 text label 污染，需要视觉选择 |
+| `sake cup` | `visualizations/som_panels/ramen_sake_cup_frame_00006_som.png` | `visualizations/gpt54_compare/ramen_sake_cup_frame_00006.png` | 小 object 原始路由容易漏检 |
+| `kamaboko` | `visualizations/som_panels/ramen_kamaboko_frame_00006_som.png` | `visualizations/gpt54_compare/ramen_kamaboko_frame_00006.png` | 可抑制过大误检 |
+| `corn` | `visualizations/som_panels/ramen_corn_frame_00024_som.png` | `visualizations/gpt54_compare/ramen_corn_frame_00024.png` | 黄色相似区域仍会造成混淆 |
+| `onion segments` | `visualizations/som_panels/ramen_onion_segments_frame_00006_som.png` | `visualizations/gpt54_compare/ramen_onion_segments_frame_00006.png` | 碎片小目标仍较难 |
+
+### 3.4 SoM 是否有效：指标证据
+
+四场景总体指标：
+
+| 方法 | Overall mIoU | mAcc | mP | mR | F1 |
+|---|---:|---:|---:|---:|---:|
+| baseline THGS | 0.5885 | 0.9776 | 0.6674 | 0.7141 | 0.6521 |
+| GPT-5.4 SoM rerouting | 0.6748 | 0.9855 | 0.7662 | 0.7685 | 0.7449 |
+| oracle 候选上限 | 0.7362 | 0.9882 | 0.8294 | 0.8289 | 0.8069 |
+
+分场景 mIoU：
+
+| Scene | baseline | GPT-5.4 SoM | oracle |
+|---|---:|---:|---:|
+| figurines | 0.5491 | 0.5982 | 0.6436 |
+| ramen | 0.4209 | 0.6226 | 0.7778 |
+| teatime | 0.8186 | 0.8325 | 0.8379 |
+| waldo_kitchen | 0.5656 | 0.6460 | 0.6854 |
+
+结论：
+
+> GPT-SoM 的主要价值是验证：THGS 的许多 object-level failure 不是没有视觉候选，而是没有选对候选。它把总体 mIoU 从 `0.5885` 提升到 `0.6748`，但仍低于 oracle `0.7362`，说明候选选择器和候选池仍有改进空间。
+
+### 3.5 失败边界：哪些地方还没有解决
+
+本轮可视化也暴露了失败边界：
+
+| 失败类型 | 例子 | 说明 |
+|---|---|---|
+| part 候选不稳定 | `hooves` | parent-part 和 SoM 都可能选不到正确小部件 |
+| 小碎片目标困难 | `onion segments` | 候选碎、边界弱，即使 oracle 上限也不如大 object |
+| 相似颜色/材质混淆 | `corn` | 黄色区域、egg、kamaboko 等互相干扰 |
+| 闭源 VLM 不可作为核心方法 | GPT-5.4 SoM | 适合做 diagnostic / pseudo-label，不宜直接包装成完全可复现主方法 |
+
+因此后续更合理的论文路线是：
+
+1. 用 GPT-SoM 证明瓶颈在 candidate selection。
+2. 用 GPT-SoM 结果蒸馏一个可复现的 lightweight reranker。
+3. parent-part 作为细粒度 part 约束模块保留，但要如实报告成功和失败边界。
+
+## 4. Parent-part 语义继承与细粒度 part 修正
 
 在转向 SoM rerouting 之前，先审查了本地已有的“THGS 层级语义继承与软查询路由改进方案”。这条线的目标不是直接提升所有 object mask，而是解决细粒度 part prompt 在 THGS 中容易被父物体淹没的问题。
 
@@ -400,7 +527,7 @@ remote_thgs_patch/diagnose_parent_part_candidates.py
 
 > Parent-part 对 `bear nose` 这类 parent 明确、局部候选存在的 part query 有明显效果；但对 `hooves` 这类小、低显著性、候选不稳定的 part query 效果不稳。它是一个有效的细粒度 part 约束机制，但不是解决所有 object/part failure 的通用模块。
 
-## 4. 方法调整思路
+## 5. 方法调整思路
 
 本轮没有继续依赖 scene fill，而是设计了一个 ReLaGS-inspired 的 SoM 候选选择实验。
 
@@ -426,7 +553,7 @@ remote_thgs_patch/diagnose_parent_part_candidates.py
 5. 用选中的 mask 替换 baseline 输出。
 6. 与 baseline 和 oracle candidate 上限对比。
 
-## 5. 代码改动
+## 6. 代码改动
 
 新增主要脚本：
 
@@ -475,7 +602,7 @@ dbb7207 Allow SoM build over all prompts
 
 说明：GitHub push 曾失败，原因是本机 GitHub SSH publickey 权限不通过。
 
-## 6. 候选池构建修正
+## 7. 候选池构建修正
 
 最初候选主要来自：
 
@@ -519,7 +646,7 @@ segment_map_generic
 
 这说明候选池本身是有潜力的，主要瓶颈是选候选。
 
-## 7. 本地 Qwen3-VL 实验
+## 8. 本地 Qwen3-VL 实验
 
 服务器中找到的模型：
 
@@ -546,7 +673,7 @@ segment_map_generic
 
 > 本地 Qwen3-VL 能带来一定提升，但选择不稳定，经常偏向大 mask 或第一个候选。
 
-## 8. GPT-5.4 API 实验
+## 9. GPT-5.4 API 实验
 
 用户提供 OpenAI 兼容 API 后，先验证模型列表，确认可用模型包括：
 
@@ -571,7 +698,7 @@ API key 没有写入仓库、脚本或文档，只以一次性环境变量使用
 
 GPT-5.4 明显优于本地 Qwen3-VL。
 
-## 9. 四场景扩展实验
+## 10. 四场景扩展实验
 
 扩展到 LERF-OVS 四个场景：
 
@@ -617,7 +744,7 @@ waldo_kitchen
 
 > GPT-5.4 SoM rerouting 将四场景总体 mIoU 从 0.5885 提升到 0.6748，提升 +0.0863。oracle 上限为 0.7362，说明候选池仍有进一步利用空间。
 
-## 10. 可视化结果、对比解释与保存路径
+## 11. 可视化结果、对比解释与保存路径
 
 本节建议作为给老师汇报时的重点页。每个可视化样例都按同一逻辑解释：
 
@@ -629,7 +756,7 @@ baseline 失败现象
 -> 指标或 oracle 上限说明是否有效
 ```
 
-### 10.1 四场景 SoM 编号候选图：证明“正确候选是否存在”
+### 11.1 四场景 SoM 编号候选图：证明“正确候选是否存在”
 
 根目录：
 
@@ -692,7 +819,7 @@ visualizations/som_panels/
 
 ![ramen bowl SoM](visualizations/som_panels/ramen_bowl_frame_00006_som.png)
 
-### 10.2 GPT-5.4 before/after 对比图：证明“改后是否有效”
+### 11.2 GPT-5.4 before/after 对比图：证明“改后是否有效”
 
 根目录：
 
@@ -747,7 +874,7 @@ visualizations/gpt54_compare/
 
 ![ramen bowl GPT compare](visualizations/gpt54_compare/ramen_bowl_frame_00006.png)
 
-### 10.3 oracle 上限对比图：证明“候选池上限”
+### 11.3 oracle 上限对比图：证明“候选池上限”
 
 ```text
 /home/Groups/group2/Working/tyy/project/THGS-main/output/gpt54_som_low_all_artifacts/<scene>/applied_compare/oracle/
@@ -773,7 +900,7 @@ visualizations/oracle_compare/ramen_bowl_frame_00006_oracle.png
 
 ![ramen bowl oracle](visualizations/oracle_compare/ramen_bowl_frame_00006_oracle.png)
 
-### 10.4 SoM part-query 诊断：不要和 parent-part 混淆
+### 11.4 SoM part-query 诊断：不要和 parent-part 混淆
 
 这里必须分清楚：下面这些 `teatime / bear nose` 和 `teatime / hooves` 图属于 **SoM rerouting 对 part query 的诊断案例**，不是 parent-part 后处理结果。它们只能说明 VLM 在编号候选中选择 part mask 的能力，不能直接证明 parent-part 语义继承模块有效。
 
@@ -800,7 +927,7 @@ visualizations/oracle_compare/ramen_bowl_frame_00006_oracle.png
 - `hooves`：当候选池没有稳定给出正确局部 part，或者候选里有更显眼的相似小区域时，SoM 仍会失败。
 - 因此，SoM 的有效性依赖两个条件：候选池覆盖正确目标、VLM 能从编号候选中稳定识别目标。
 
-### 10.5 Parent-part 可视化：需要单独看 `render_parent_part`
+### 11.5 Parent-part 可视化：需要单独看 `render_parent_part`
 
 parent-part 必须单独评价，不能用上面的 GPT-SoM 图来证明。它对应的真实输出路径是：
 
@@ -862,7 +989,7 @@ parent-part 的成功/失败判据如下：
 
 > Parent-part 模块在机制上提供了可解释的 parent anchor、containment 和面积先验，但需要用 `render_parent_part` 的真实 before/after 图以及 `parent_part_debug.json` 才能证明具体样例是否有效。不能用 GPT-SoM 的 part-query 图替代 parent-part 证据。
 
-### 10.6 最终预测输出
+### 11.6 最终预测输出
 
 GPT-5.4 rerouting 后预测：
 
@@ -876,7 +1003,7 @@ oracle 上限预测：
 /home/Groups/group2/Working/tyy/project/THGS-main/output/render_gpt54_som_low_all_oracle/lerf
 ```
 
-### 10.7 Parent-part 诊断结果
+### 11.7 Parent-part 诊断结果
 
 parent-part 候选诊断脚本：
 
@@ -898,7 +1025,7 @@ debug JSON：
 
 该 JSON 记录每个 part prompt 使用的 anchors、被选中的 segment layer / segment_id、面积、containment、cover、text label 和最终 score，便于后续复盘 `bear nose`、`hooves` 等 part 查询是否真正受 parent 约束。
 
-## 11. 适合写进论文的表述
+## 12. 适合写进论文的表述
 
 不建议直接写成：
 
@@ -923,7 +1050,7 @@ debug JSON：
 
 > THGS 的大目标 object failure 很多不是因为没有视觉候选，而是因为语义路由没有从候选中选出正确 mask。GPT-5.4 SoM rerouting 显著缩小了 baseline 与 oracle candidate 上限之间的差距。
 
-## 12. 后续建议
+## 13. 后续建议
 
 当前 GPT-5.4 API 结果很强，但作为论文主方法仍有风险：
 
@@ -939,6 +1066,6 @@ debug JSON：
 4. 进一步改进候选池，缩小 GPT 与 oracle 的差距。
 5. 对失败类如 `corn`, `onion segments`, `figurines` 中的小物体做更细粒度候选生成。
 
-## 13. 汇报用一句话总结
+## 14. 汇报用一句话总结
 
 本轮实验表明，parent-part 语义继承和空间锚点能改善部分细粒度 part 查询，但它不是 object-level 指标提升有限的主要原因。THGS 在 object-level 上的核心瓶颈是正确候选存在但语义路由没有选中。通过 ReLaGS-inspired GPT-SoM rerouting，四场景总体 mIoU 从 0.5885 提升到 0.6748，oracle 上限达到 0.7362，证明引入视觉大模型进行候选选择是有效方向，也为后续设计可复现的 reranker 或蒸馏模块提供了明确依据。
