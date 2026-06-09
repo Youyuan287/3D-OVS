@@ -575,9 +575,19 @@ waldo_kitchen
 
 > GPT-5.4 SoM rerouting 将四场景总体 mIoU 从 0.5885 提升到 0.6748，提升 +0.0863。oracle 上限为 0.7362，说明候选池仍有进一步利用空间。
 
-## 10. 可视化结果与保存路径
+## 10. 可视化结果、对比解释与保存路径
 
-### 10.1 四场景 SoM 编号候选图
+本节建议作为给老师汇报时的重点页。每个可视化样例都按同一逻辑解释：
+
+```text
+baseline 失败现象
+-> 为什么原 THGS 路由容易失败
+-> 本轮改动如何介入
+-> 可视化中应该看什么
+-> 指标或 oracle 上限说明是否有效
+```
+
+### 10.1 四场景 SoM 编号候选图：证明“正确候选是否存在”
 
 根目录：
 
@@ -604,7 +614,30 @@ waldo_kitchen
 - 每个候选的 overlay
 - 候选来源和面积
 
-### 10.2 GPT-5.4 before/after 对比图
+本地 GitHub 复现包建议保存代表性图到：
+
+```text
+visualizations/som_panels/
+```
+
+汇报中建议至少展示以下六个 `ramen` object 低分样例：
+
+| 样例 | baseline 问题 | 看 SoM 图时要说明什么 | 结论 |
+|---|---|---|---|
+| `bowl` | baseline 为空 mask | SoM 候选中存在完整 bowl，但文本路由把它误标到其他类别 | 候选存在，失败来自候选选择 |
+| `plate` | baseline 为空或选到局部 | plate 候选常被 `plastic ladle/spoon` 等标签污染 | 不能只按自动 text label 筛候选 |
+| `sake cup` | 小 object 漏检 | SoM 候选有小杯子，但原路由置信度低 | VLM 视觉选择比 CLIP label 更稳 |
+| `kamaboko` | 大面积误检 | 候选中有更贴合的局部鱼糕区域 | rerouting 能抑制过大 mask |
+| `corn` | 易选到黄色相似区域 | 候选中存在 corn-like 区域，但与 egg/yellow region 混淆 | 仍依赖候选质量和 VLM 判别 |
+| `onion segments` | 细小目标选错 | 候选很碎，oracle 也低于大物体 | 小碎片仍是后续难点 |
+
+图片引用模板：
+
+```markdown
+![ramen bowl SoM](visualizations/som_panels/ramen_bowl_frame_00006_som.png)
+```
+
+### 10.2 GPT-5.4 before/after 对比图：证明“改后是否有效”
 
 根目录：
 
@@ -625,13 +658,78 @@ waldo_kitchen
 - baseline mask
 - GPT-5.4 rerouting 后的 mask
 
-### 10.3 oracle 上限对比图
+本地 GitHub 复现包建议保存代表性图到：
+
+```text
+visualizations/gpt54_compare/
+```
+
+汇报时不要只说“mIoU 提升”，需要逐图说明：
+
+| 对比项 | 应该观察的视觉差异 | 说明 |
+|---|---|---|
+| 原图 vs GT | 目标真实位置和大小 | 明确目标不是语义歧义 |
+| baseline vs GT | 原 THGS 是空、过大还是错选 | 定性失败类型 |
+| GPT-5.4 rerouting vs GT | rerouting 是否选中更接近 GT 的候选 | 证明 VLM 选择有效 |
+| GPT-5.4 vs oracle | 还差在哪里 | 判断后续该改 VLM 选择还是候选池 |
+
+图片引用模板：
+
+```markdown
+![ramen bowl GPT compare](visualizations/gpt54_compare/ramen_bowl_frame_00006.png)
+```
+
+### 10.3 oracle 上限对比图：证明“候选池上限”
 
 ```text
 /home/Groups/group2/Working/tyy/project/THGS-main/output/gpt54_som_low_all_artifacts/<scene>/applied_compare/oracle/
 ```
 
-### 10.4 最终预测输出
+oracle 图不是最终方法结果，而是诊断候选池的 upper bound。解释时要强调：
+
+- 如果 oracle 高、GPT 低：候选存在，VLM 选择还不够稳。
+- 如果 oracle 也低：候选池本身缺目标或边界质量差。
+- 本轮四场景 oracle mIoU `0.7362`，GPT-5.4 mIoU `0.6748`，说明大部分提升空间来自 candidate selection，但候选池仍可继续优化。
+
+本地 GitHub 复现包建议保存代表性图到：
+
+```text
+visualizations/oracle_compare/
+```
+
+### 10.4 Parent-part 可视化：证明“parent 是否真的约束 part”
+
+parent-part 不应只展示最终指标，必须展示 part 是否落在 parent 内。建议展示 `teatime / bear nose` 和 `teatime / hooves`：
+
+| 样例 | baseline 问题 | parent-part 观察点 | 是否有效 |
+|---|---|---|---|
+| `bear nose` | part 容易扩散到 bear 以外或选到整脸/整物体 | 输出 mask 是否被限制在 bear anchor 内，且面积接近 nose | 若 containment 高且面积小，说明 parent anchor 生效 |
+| `hooves` | 易选到整只羊/玩偶或其它小黑区域 | 输出是否只覆盖 parent 下方小部件 | 若 mask 不再扩成 parent object，说明面积先验有效 |
+
+对应路径：
+
+```text
+/home/Groups/group2/Working/tyy/project/THGS-main/output/render_parent_part/lerf
+/home/Groups/group2/Working/tyy/project/THGS-main/output/parent_part_debug.json
+```
+
+本地 GitHub 复现包建议保存代表性图到：
+
+```text
+visualizations/parent_part/
+```
+
+解释 parent-part 图时要结合 `parent_part_debug.json` 中的字段：
+
+| debug 字段 | 含义 | 汇报时怎么解释 |
+|---|---|---|
+| `anchors` | 当前 part 使用了哪些 parent/base mask | 说明 parent 来源 |
+| `containment` | part candidate 有多少比例落在 parent 内 | 证明空间约束是否生效 |
+| `cover` | part 占 parent 的比例 | 判断是否选成整物体 |
+| `text_label` | segment 自动语义标签 | 判断 text label 是否可靠 |
+| `score` | 综合 containment、面积、语义 bonus 后的分数 | 说明为什么选这个候选 |
+
+### 10.5 最终预测输出
 
 GPT-5.4 rerouting 后预测：
 
@@ -645,7 +743,7 @@ oracle 上限预测：
 /home/Groups/group2/Working/tyy/project/THGS-main/output/render_gpt54_som_low_all_oracle/lerf
 ```
 
-### 10.5 Parent-part 诊断结果
+### 10.6 Parent-part 诊断结果
 
 parent-part 候选诊断脚本：
 

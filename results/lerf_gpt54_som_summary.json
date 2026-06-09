@@ -1,0 +1,42 @@
+{
+  "date": "2026-06-08",
+  "dataset": "LERF-OVS",
+  "scenes": ["figurines", "ramen", "teatime", "waldo_kitchen"],
+  "low_iou_threshold": 0.1,
+  "methods": {
+    "baseline_thgs": {
+      "overall_miou": 0.5885,
+      "mAcc": 0.9776,
+      "mP": 0.6674,
+      "mR": 0.7141,
+      "F1": 0.6521
+    },
+    "gpt54_som_rerouting": {
+      "overall_miou": 0.6748,
+      "mAcc": 0.9855,
+      "mP": 0.7662,
+      "mR": 0.7685,
+      "F1": 0.7449
+    },
+    "oracle_candidate_upper_bound": {
+      "overall_miou": 0.7362,
+      "mAcc": 0.9882,
+      "mP": 0.8294,
+      "mR": 0.8289,
+      "F1": 0.8069
+    }
+  },
+  "per_scene_miou": {
+    "figurines": {"baseline": 0.5491, "gpt54_som": 0.5982, "oracle": 0.6436},
+    "ramen": {"baseline": 0.4209, "gpt54_som": 0.6226, "oracle": 0.7778},
+    "teatime": {"baseline": 0.8186, "gpt54_som": 0.8325, "oracle": 0.8379},
+    "waldo_kitchen": {"baseline": 0.5656, "gpt54_som": 0.6460, "oracle": 0.6854}
+  },
+  "low_score_cases": {
+    "figurines": 11,
+    "ramen": 33,
+    "teatime": 4,
+    "waldo_kitchen": 6,
+    "total": 54
+  }
+}

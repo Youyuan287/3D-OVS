@@ -5,3 +5,18 @@ __pycache__/
 *.pyd
 .pytest_cache/
 
+# Large external assets and generated THGS outputs.
+output/
+data/
+models/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+
+# Local secrets.
+.env
+*.env
+selections_gpt54.jsonl
