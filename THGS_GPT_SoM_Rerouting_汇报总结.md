@@ -731,44 +731,80 @@ visualizations/oracle_compare/ramen_bowl_frame_00006_oracle.png
 
 ![ramen bowl oracle](visualizations/oracle_compare/ramen_bowl_frame_00006_oracle.png)
 
-### 10.4 Parent-part 可视化：证明“parent 是否真的约束 part”
+### 10.4 SoM part-query 诊断：不要和 parent-part 混淆
 
-parent-part 不应只展示最终指标，必须展示 part 是否落在 parent 内。建议展示 `teatime / bear nose` 和 `teatime / hooves`：
+这里必须分清楚：下面这些 `teatime / bear nose` 和 `teatime / hooves` 图属于 **SoM rerouting 对 part query 的诊断案例**，不是 parent-part 后处理结果。它们只能说明 VLM 在编号候选中选择 part mask 的能力，不能直接证明 parent-part 语义继承模块有效。
 
-| 样例 | baseline 问题 | parent-part 观察点 | 是否有效 |
-|---|---|---|---|
-| `bear nose` | part 容易扩散到 bear 以外或选到整脸/整物体 | 输出 mask 是否被限制在 bear anchor 内，且面积接近 nose | 若 containment 高且面积小，说明 parent anchor 生效 |
-| `hooves` | 易选到整只羊/玩偶或其它小黑区域 | 输出是否只覆盖 parent 下方小部件 | 若 mask 不再扩成 parent object，说明面积先验有效 |
+已保存到 GitHub 的 SoM part-query 图：
 
-对应路径：
+| 样例 | 本地可视化文件 | 结论 |
+|---|---|---|
+| `bear nose` SoM | `visualizations/som_part_cases/teatime_bear_nose_frame_00002_som.png` | 候选池中存在局部 nose 候选 |
+| `bear nose` GPT-SoM 对比 | `visualizations/som_part_cases/teatime_bear_nose_frame_00002_gpt54.png` | baseline 选成整熊，GPT-SoM 选到局部 nose，IoU 从 `0.064` 到 `0.983`，这是 SoM 成功案例 |
+| `hooves` SoM | `visualizations/som_part_cases/teatime_hooves_frame_00025_som.png` | 候选中明显混入人的腿、桌椅、盘子等干扰，正确 hooves 候选不明显 |
+| `hooves` GPT-SoM 对比 | `visualizations/som_part_cases/teatime_hooves_frame_00025_gpt54.png` | GPT-SoM 仍选错到人腿/鞋附近，IoU 仍为 `0.000`，这是 SoM 失败案例 |
+
+![teatime bear nose SoM](visualizations/som_part_cases/teatime_bear_nose_frame_00002_som.png)
+
+![teatime bear nose compare](visualizations/som_part_cases/teatime_bear_nose_frame_00002_gpt54.png)
+
+![teatime hooves SoM](visualizations/som_part_cases/teatime_hooves_frame_00025_som.png)
+
+![teatime hooves compare](visualizations/som_part_cases/teatime_hooves_frame_00025_gpt54.png)
+
+这两个 part-query 例子说明：
+
+- `bear nose`：当候选池里有明显正确的局部候选时，SoM + GPT-5.4 能把原本选成整物体的 mask 纠正成局部 part。
+- `hooves`：当候选池没有稳定给出正确局部 part，或者候选里有更显眼的相似小区域时，SoM 仍会失败。
+- 因此，SoM 的有效性依赖两个条件：候选池覆盖正确目标、VLM 能从编号候选中稳定识别目标。
+
+### 10.5 Parent-part 可视化：需要单独看 `render_parent_part`
+
+parent-part 必须单独评价，不能用上面的 GPT-SoM 图来证明。它对应的真实输出路径是：
 
 ```text
 /home/Groups/group2/Working/tyy/project/THGS-main/output/render_parent_part/lerf
 /home/Groups/group2/Working/tyy/project/THGS-main/output/parent_part_debug.json
 ```
 
-本地 GitHub 复现包建议保存代表性图到：
+本地 GitHub 复现包中应保存到：
 
 ```text
 visualizations/parent_part/
 ```
 
-已保存到 GitHub 的 parent-part 代表性图：
+本轮已补充两个真实 `render_parent_part` 案例，一个成功、一个失败：
 
-| 样例 | 本地可视化文件 | 汇报时说明 |
+| 类型 | 样例 | baseline IoU | parent-part IoU | 观察结论 |
+|---|---|---:|---:|---|
+| 成功 | `teatime/frame_00002/bear nose` | 0.0642 | 0.9840 | baseline 几乎选成整只熊，parent-part 通过 parent anchor 和面积约束把 mask 收缩到鼻子局部 |
+| 失败 | `teatime/frame_00025/hooves` | 0.0000 | 0.0000 | parent-part 没有找到正确蹄子，反而选到白羊身体/头部大片区域，说明 anchor/候选或面积先验在该 part 上失效 |
+
+对应本地可视化：
+
+```text
+visualizations/parent_part/teatime_frame_00002_bear_nose_parent_part_compare.png
+visualizations/parent_part/teatime_frame_00025_hooves_parent_part_compare.png
+```
+
+![parent-part bear nose success](visualizations/parent_part/teatime_frame_00002_bear_nose_parent_part_compare.png)
+
+![parent-part hooves failure](visualizations/parent_part/teatime_frame_00025_hooves_parent_part_compare.png)
+
+这两张图展示的是 parent-part 本身，不是 SoM：
+
+- `bear nose` 成功的原因：baseline 原本把整只熊作为高相似区域，parent-part 使用 `anchor_terms=[bear]` 确定父物体，再在父物体内部按 part 面积和局部语义选择更小 segment，因此 mask 从整熊收缩为鼻子局部。
+- `hooves` 失败的原因：`hooves` 是更小、更低显著性的 part，正确候选不稳定；parent anchor 约束虽然阻止了完全无关区域，但候选选择仍落到白羊大区域，面积先验没有把它压到真正蹄子位置。
+- 因此 parent-part 的有效性不是“整体稳定提升”，而是“在 parent anchor 正确且 fine segment 中存在合适 part 候选时有效；在候选缺失或 anchor/面积先验不适配时失败”。
+
+parent-part 的成功/失败判据如下：
+
+| 判据 | 成功表现 | 失败表现 |
 |---|---|---|
-| `bear nose` SoM | `visualizations/parent_part/teatime_bear_nose_frame_00002_som.png` | 展示 part 候选与 parent anchor 的关系 |
-| `bear nose` 对比 | `visualizations/parent_part/teatime_bear_nose_frame_00002_gpt54.png` | 展示 baseline / GT / rerouting 结果 |
-| `hooves` SoM | `visualizations/parent_part/teatime_hooves_frame_00025_som.png` | 展示小 part 候选容易和 parent/其它小区域混淆 |
-| `hooves` 对比 | `visualizations/parent_part/teatime_hooves_frame_00025_gpt54.png` | 展示 parent 约束和面积先验是否抑制整物体误选 |
-
-![teatime bear nose SoM](visualizations/parent_part/teatime_bear_nose_frame_00002_som.png)
-
-![teatime bear nose compare](visualizations/parent_part/teatime_bear_nose_frame_00002_gpt54.png)
-
-![teatime hooves SoM](visualizations/parent_part/teatime_hooves_frame_00025_som.png)
-
-![teatime hooves compare](visualizations/parent_part/teatime_hooves_frame_00025_gpt54.png)
+| parent anchor 是否正确 | anchor 覆盖目标 part 所属父物体 | anchor 本身选错父物体或为空 |
+| containment 是否生效 | part candidate 大部分落在 parent 内 | candidate 落到 parent 外的相似区域 |
+| 面积先验是否合理 | part 只覆盖父物体局部 | part 扩张成整物体或过小为空 |
+| fine segment 是否有正确候选 | `parent_part_debug.json` 中 top candidate 与 GT 接近 | top candidate text/area/containment 分数高但 GT IoU 低 |
 
 解释 parent-part 图时要结合 `parent_part_debug.json` 中的字段：
 
@@ -780,7 +816,11 @@ visualizations/parent_part/
 | `text_label` | segment 自动语义标签 | 判断 text label 是否可靠 |
 | `score` | 综合 containment、面积、语义 bonus 后的分数 | 说明为什么选这个候选 |
 
-### 10.5 最终预测输出
+当前结论应谨慎表述为：
+
+> Parent-part 模块在机制上提供了可解释的 parent anchor、containment 和面积先验，但需要用 `render_parent_part` 的真实 before/after 图以及 `parent_part_debug.json` 才能证明具体样例是否有效。不能用 GPT-SoM 的 part-query 图替代 parent-part 证据。
+
+### 10.6 最终预测输出
 
 GPT-5.4 rerouting 后预测：
 
@@ -794,7 +834,7 @@ oracle 上限预测：
 /home/Groups/group2/Working/tyy/project/THGS-main/output/render_gpt54_som_low_all_oracle/lerf
 ```
 
-### 10.6 Parent-part 诊断结果
+### 10.7 Parent-part 诊断结果
 
 parent-part 候选诊断脚本：
 

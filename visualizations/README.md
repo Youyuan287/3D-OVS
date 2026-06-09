@@ -23,8 +23,11 @@ visualizations/
   oracle_compare/
     representative_oracle_upper_bound.png
   parent_part/
-    teatime_bear_nose_*.png
-    teatime_hooves_*.png
+    teatime_frame_00002_bear_nose_parent_part_compare.png
+    teatime_frame_00025_hooves_parent_part_compare.png
+  som_part_cases/
+    teatime_bear_nose_frame_00002_*.png
+    teatime_hooves_frame_00025_*.png
 ```
 
 The report `THGS_GPT_SoM_Rerouting_汇报总结.md` references these files. If the images are missing after clone, copy them from:
@@ -33,3 +36,8 @@ The report `THGS_GPT_SoM_Rerouting_汇报总结.md` references these files. If t
 /home/Groups/group2/Working/tyy/project/THGS-main/output/gpt54_som_low_all_artifacts/
 /home/Groups/group2/Working/tyy/project/THGS-main/output/render_parent_part/lerf
 ```
+
+Important distinction:
+
+- `parent_part/` contains true `render_parent_part` outputs for evaluating the parent-part module.
+- `som_part_cases/` contains GPT-SoM rerouting diagnostics for part queries. These should not be used as evidence that the parent-part module itself works.
